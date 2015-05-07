@@ -70,7 +70,6 @@ func listenForPods(endpoint string) {
 
 		var actionType string
 		json.Unmarshal(*objmap["type"], &actionType)
-		println(actionType)
 
 		var pod api.Pod
 		err = json.Unmarshal(*objmap["object"], &pod)
@@ -79,7 +78,6 @@ func listenForPods(endpoint string) {
 			case "MODIFIED":
 				registrate(pod)
 			case "DELETED":
-				println("deleted stuff")
 				deletePod(pod)
 		}
 	}
