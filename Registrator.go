@@ -28,38 +28,66 @@ func init() {
 }
 
 func main() {
-
-	listenForPods(kubernetesEndpoint)
+	listenForPods()
 }
 
-func listenForPods(endpoint string) {
-	u, err := url.Parse(endpoint)
+func listenForPods() {
+
+	wsConn := openConnection()
+
+	var wsErrors chan string = make(chan string)
+
+	go listen(wsConn, wsErrors)
+	go reconnector(wsErrors)
+
+	var input string
+	fmt.Scanln(&input)
+
+}
+
+func openConnection() *websocket.Conn {
+	u, err := url.Parse(kubernetesEndpoint)
 	if err != nil {
-		log.Println(err)
-		return
+		log.Fatal(err)
 	}
+
 
 	rawConn, err := net.Dial("tcp", u.Host)
 	if err != nil {
-		log.Println(err)
-		return
+		log.Fatal(err)
 	}
 
 	wsHeaders := http.Header{
-		"Origin":                   {endpoint},
+		"Origin":                   {kubernetesEndpoint},
 		"Sec-WebSocket-Extensions": {"permessage-deflate; client_max_window_bits, x-webkit-deflate-frame"},
 	}
 
 	wsConn, resp, err := websocket.NewClient(rawConn, u, wsHeaders, 1024, 1024)
 	if err != nil {
-		log.Println(fmt.Errorf("websocket.NewClient Error: %s\nResp:%+v", err, resp))
-		return
+		log.Fatal(fmt.Errorf("websocket.NewClient Error: %s\nResp:%+v", err, resp))
+
 	}
+
+	return wsConn
+}
+
+func reconnector(wsErrors chan string) {
+	for {
+		_ = <- wsErrors
+		log.Println("Reconnecting...")
+		go listen(openConnection(), wsErrors)
+	}
+}
+
+func listen(wsConn *websocket.Conn, wsErrors chan string) {
+	log.Println("Listening for pods")
 
 	for {
 		_, r, err := wsConn.NextReader()
+
 		if err != nil {
-			log.Println(err)
+			log.Printf("Error getting reader: %v",err)
+			wsErrors <- "Error"
 			return
 		}
 
@@ -75,10 +103,10 @@ func listenForPods(endpoint string) {
 		err = json.Unmarshal(*objmap["object"], &pod)
 
 		switch actionType {
-			case "MODIFIED":
-				registrate(pod)
-			case "DELETED":
-				deletePod(pod)
+		case "MODIFIED":
+			registrate(pod)
+		case "DELETED":
+			deletePod(pod)
 		}
 	}
 }
