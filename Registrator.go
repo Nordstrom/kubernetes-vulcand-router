@@ -138,6 +138,6 @@ func deletePod(pod api.Pod) {
 	_, err := client.Delete("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, false);
 
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed to delete backend '%v'", pod.Labels["name"]);
 	}
 }
