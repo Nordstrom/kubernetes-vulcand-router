@@ -135,7 +135,7 @@ func deletePod(pod api.Pod) {
 	machines := []string{etcdAddress}
 	client := etcd.NewClient(machines)
 
-	_, err := client.Delete("vulcan/backends/todo_app_backend/servers/" + pod.Status.PodIP, false);
+	_, err := client.Delete("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, false);
 
 	if err != nil {
 		log.Fatal(err)
