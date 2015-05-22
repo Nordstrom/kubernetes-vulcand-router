@@ -1,3 +1,23 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+This tool watches the Kubernetes API server for Pod (de)registration. New Pods are registered to
+Vulcan by setting the correct etcd keys. A deleted Pod is deleted from Vulcan as well by removing it's key in etcd.
+Pods will be registered using the following key pattern in etcd: /vulcan/backends/[pod label name]/servers/[pod IP]. Make sure
+your Vulcan backend/frontend configuration is configured to use backend servers based on the pod name.
+ */
 package main
 
 import (
@@ -25,12 +45,19 @@ func init() {
 	flag.StringVar(&etcdAddress, "etcd", "", "etcd address")
 
 	flag.Parse()
+
+	if kubernetesEndpoint == "" || etcdAddress == "" {
+		log.Fatal(`Missing required properties. Usage: Registrator -pods "ws://[kubernetes-server]/api/v1beta3/namespaces/default/pods?watch=true" -etcd "[etcd-address]"`)
+	}
 }
 
 func main() {
 	listenForPods()
 }
 
+/**
+Open WS connection and start Go routines to listen for pods.
+ */
 func listenForPods() {
 
 	wsConn := openConnection()
@@ -45,6 +72,9 @@ func listenForPods() {
 
 }
 
+/**
+Open WebSocket connection to Kubernetes API server
+ */
 func openConnection() *websocket.Conn {
 	u, err := url.Parse(kubernetesEndpoint)
 	if err != nil {
@@ -71,6 +101,9 @@ func openConnection() *websocket.Conn {
 	return wsConn
 }
 
+/**
+When the WebSocket connection disconnects for some reason, try to reconnect.
+ */
 func reconnector(wsErrors chan string) {
 	for {
 		_ = <- wsErrors
@@ -79,6 +112,9 @@ func reconnector(wsErrors chan string) {
 	}
 }
 
+/**
+Listen for Pods. We're only interested in MODIFIED and DELETED events.
+ */
 func listen(wsConn *websocket.Conn, wsErrors chan string) {
 	log.Println("Listening for pods")
 
@@ -104,20 +140,23 @@ func listen(wsConn *websocket.Conn, wsErrors chan string) {
 
 		switch actionType {
 		case "MODIFIED":
-			registrate(pod)
+			register(pod)
 		case "DELETED":
 			deletePod(pod)
 		}
 	}
 }
 
-func registrate(pod api.Pod) {
+/**
+Register a new backend server in Vulcan based on the new Pod
+ */
+func register(pod api.Pod) {
 	if(pod.Status.Phase != "Running") {
 		return
 	}
 
 
-	fmt.Printf("Registrating pod %v listening on %v to %v\n", pod.Name, pod.Status.PodIP, etcdAddress)
+	log.Printf("Registrating pod %v listening on %v to %v\n", pod.Name, pod.Status.PodIP, etcdAddress)
 
 	machines := []string{etcdAddress}
 	client := etcd.NewClient(machines)
@@ -129,8 +168,11 @@ func registrate(pod api.Pod) {
 	}
 }
 
+/**
+Delete a backend server from Vulcan when a Pod is deleted.
+ */
 func deletePod(pod api.Pod) {
-	fmt.Printf("Deleting pod %v from %v\n", pod.Name, etcdAddress)
+	log.Printf("Deleting pod %v from %v\n", pod.Name, etcdAddress)
 
 	machines := []string{etcdAddress}
 	client := etcd.NewClient(machines)
