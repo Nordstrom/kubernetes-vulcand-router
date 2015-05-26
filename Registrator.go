@@ -22,7 +22,6 @@ package main
 
 import (
 	"github.com/gorilla/websocket"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,6 +30,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"flag"
 	"github.com/coreos/go-etcd/etcd"
+	"fmt"
 )
 
 var kubernetesEndpoint string
@@ -63,12 +63,9 @@ func listenForPods() {
 	wsConn := openConnection()
 
 	var wsErrors chan string = make(chan string)
-
 	go listen(wsConn, wsErrors)
 	go reconnector(wsErrors)
-
-	var input string
-	fmt.Scanln(&input)
+	select {}
 
 }
 
@@ -94,7 +91,7 @@ func openConnection() *websocket.Conn {
 
 	wsConn, resp, err := websocket.NewClient(rawConn, u, wsHeaders, 1024, 1024)
 	if err != nil {
-		log.Fatal(fmt.Errorf("websocket.NewClient Error: %s\nResp:%+v", err, resp))
+		log.Fatalf("websocket.NewClient Error: %s\nResp:%+v", err, resp)
 
 	}
 
