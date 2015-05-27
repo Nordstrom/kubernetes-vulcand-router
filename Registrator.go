@@ -158,7 +158,7 @@ func register(pod api.Pod) {
 	machines := []string{etcdAddress}
 	client := etcd.NewClient(machines)
 
-	podUrl := fmt.Sprintf("http://%v:%v", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].HostPort)
+	podUrl := fmt.Sprintf("http://%v:%v", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].ContainerPort)
 
 	if _, err := client.Set("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, `{"URL": "` + podUrl + `"}`, 0); err != nil {
 		log.Fatal(err)
