@@ -11,9 +11,4 @@ Running
 
 Run as Docker container as follows:
 
-    docker run -d amdatu/amdatu-vulcanized app -pods "ws://[kubernetes-server]/api/v1beta3/namespaces/default/pods?watch=true" -etcd "[etcd-address]"
-
-For example:
-
-    docker run -ti --rm amdatu/amdatu-vulcanized app -pods "ws://rti-kubernetes.amdatu.com:8080/api/v1beta3/namespaces/default/pods?watch=true" -etcd "http://10.100.103.4:2379"
-
+    docker run -d amdatu/amdatu-vulcanized -pods "ws://[kubernetes-server]:8080/api/v1beta3/namespaces/default/pods?watch=true" -etcd "[etcd-address]:2375"
