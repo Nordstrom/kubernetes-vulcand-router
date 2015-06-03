@@ -153,12 +153,19 @@ func register(pod api.Pod) {
 	}
 
 
-	log.Printf("Registrating pod %v listening on %v to %v\n", pod.Name, pod.Status.PodIP, etcdAddress)
+	log.Printf("Register pod %v listening on %v to %v\n", pod.Name, pod.Status.PodIP, etcdAddress)
 
 	machines := []string{etcdAddress}
 	client := etcd.NewClient(machines)
 
 	podUrl := fmt.Sprintf("http://%v:%v", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].ContainerPort)
+
+	backendKey := "vulcan/backends/" + pod.Labels["name"] + "/backend"
+	_, err := client.Get(backendKey, false, false)
+	if err != nil {
+		log.Printf("Can't retrieve backend on key %v\n", backendKey)
+		return
+	}
 
 	if _, err := client.Set("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, `{"URL": "` + podUrl + `"}`, 0); err != nil {
 		log.Fatal(err)
