@@ -31,6 +31,7 @@ import (
 	"flag"
 	"github.com/coreos/go-etcd/etcd"
 	"fmt"
+	"strings"
 )
 
 var kubernetesEndpoint string
@@ -47,7 +48,7 @@ func init() {
 	flag.Parse()
 
 	if kubernetesEndpoint == "" || etcdAddress == "" {
-		log.Fatal(`Missing required properties. Usage: Registrator -pods "ws://[kubernetes-server]/api/v1beta3/namespaces/default/pods?watch=true" -etcd "[etcd-address]"`)
+		log.Fatal(`Missing required properties. Usage: Registrator -pods "ws://[kubernetes-server]/api/v1/pods?watch=true" -etcd "[etcd-address]"`)
 	}
 }
 
@@ -155,19 +156,26 @@ func register(pod api.Pod) {
 
 	log.Printf("Register pod %v listening on %v to %v\n", pod.Name, pod.Status.PodIP, etcdAddress)
 
-	machines := []string{etcdAddress}
-	client := etcd.NewClient(machines)
+	client := etcd.NewClient(strings.Split(etcdAddress, ","))
 
-	podUrl := fmt.Sprintf("http://%v:%v", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].ContainerPort)
-
-	backendKey := "vulcan/backends/" + pod.Labels["name"] + "/backend"
-	_, err := client.Get(backendKey, false, false)
-	if err != nil {
-		log.Printf("Can't retrieve backend on key %v\n", backendKey)
+	if len(pod.Spec.Containers[0].Ports) == 0 {
+		log.Println("No ports exposed by container, skipping registration")
 		return
 	}
 
-	if _, err := client.Set("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, `{"URL": "` + podUrl + `"}`, 0); err != nil {
+	podUrl := fmt.Sprintf("http://%v:%v", pod.Status.PodIP, pod.Spec.Containers[0].Ports[0].ContainerPort)
+
+	backendKey := fmt.Sprintf("/vulcan/backends/%v-%v/backend", pod.Namespace, pod.Labels["name"])
+	_, err := client.Get(backendKey, false, false)
+	if err != nil {
+		log.Printf("Can't retrieve backend on key %v\n", backendKey)
+		log.Print(err)
+		return
+	}
+
+	serverKey := fmt.Sprintf("vulcan/backends/%v-%v/servers/%v", pod.Namespace, pod.Labels["name"], pod.Status.PodIP)
+
+	if _, err := client.Set(serverKey, `{"URL": "` + podUrl + `"}`, 0); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -176,14 +184,16 @@ func register(pod api.Pod) {
 Delete a backend server from Vulcan when a Pod is deleted.
  */
 func deletePod(pod api.Pod) {
-	log.Printf("Deleting pod %v from %v\n", pod.Name, etcdAddress)
+	key := fmt.Sprintf("vulcan/backends/%v-%v/servers/%v", pod.Namespace, pod.Labels["name"],pod.Status.PodIP)
 
-	machines := []string{etcdAddress}
-	client := etcd.NewClient(machines)
+	log.Printf("Deleting backend %v from %v", key, etcdAddress)
 
-	_, err := client.Delete("vulcan/backends/" + pod.Labels["name"] + "/servers/" + pod.Status.PodIP, false);
+	client := etcd.NewClient(strings.Split(etcdAddress, ","))
+
+	_, err := client.Delete(key, false);
 
 	if err != nil {
-		log.Printf("Failed to delete backend '%v'", pod.Labels["name"]);
+		log.Printf("Failed to delete backend '%v'. It might already be removed", key);
+		log.Println(err)
 	}
 }
