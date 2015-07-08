@@ -1,1 +1,3 @@
-FROM golang:1.4-onbuild
+FROM busybox
+ADD vulcanizerd /vulcanized
+ENTRYPOINT ["/vulcanized"]
