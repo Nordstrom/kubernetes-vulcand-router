@@ -68,14 +68,15 @@ func main() {
 Open WS connection and start Go routines to listen for services.
 */
 func listenForServices(servicesHost, etcdAddresses string) {
+	log.Printf("Listening for Services from %v and registering them to %v", servicesHost, etcdAddresses)
 	servicesEndpoint := fmt.Sprintf("ws://%v/api/v1/services?watch=true", servicesHost)
 	servicesURL, err := url.Parse(servicesEndpoint)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Unable to parse URL. Error: %v", err)
 	}
 	etcd, err2 := newEtcdClient(etcdAddresses)
 	if err2 != nil {
-		log.Fatal(err2)
+		log.Fatalf("Unable to create etcd client. Error: %v", err2)
 	}
 
 	wsConn := openConnection(*servicesURL)
@@ -107,7 +108,7 @@ Open WebSocket connection to Kubernetes API server
 func openConnection(apiserverURL url.URL) *websocket.Conn {
 	rawConn, err := net.Dial("tcp", apiserverURL.Host)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Unable to open a connection to apiserver at %v. Error: %v", apiserverURL.String(), err)
 	}
 
 	wsHeaders := http.Header{
@@ -245,13 +246,7 @@ func deleteService(etcd etcdclient.KeysAPI, svc api.Service) error {
 
 	_, err := etcd.Delete(context.Background(), key, nil)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err != nil {
-		log.Printf("Failed to delete backend '%v'. It might already be removed", key)
-		log.Println(err)
-		return err
+		log.Fatalf("Unable to delete backend from etcd (key: %v). Error: %v", key, err)
 	}
 
 	return nil
