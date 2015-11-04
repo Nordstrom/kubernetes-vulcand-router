@@ -1,0 +1,18 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-vulcand-router-svc
+  labels:
+    name: k8s-vulcand-router
+    # verify: kubernetes-vulcand-router
+spec:
+  type: NodePort 
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 31902
+    protocol: TCP
+    name: http
+  selector:
+    name: k8s-vulcand-router
