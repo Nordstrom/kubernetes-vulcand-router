@@ -8,7 +8,7 @@ Deleted Services are deleted from Vulcan as well by calls to the admin API.
 Services will be registered when they contain the label `vulcand.io/routed=true`
 The route expression that Vulcand will use to direct traffic to the Service
 will be read from the Service's annotations, specifically from the annotation
-with the key `vulcand.io/route-expression`.
+with the key `vulcand.io/route`.
 
 ## Running
 

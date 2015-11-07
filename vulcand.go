@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
+	log "github.com/Sirupsen/logrus"
 	vulcandAPI "github.com/mailgun/vulcand/api"
 	vulcand "github.com/mailgun/vulcand/engine"
 	// "github.com/mailgun/vulcand/plugin"
@@ -45,6 +47,56 @@ func newVulcandClient(vulcandAdminURLString string) (*vulcandAPI.Client, error) 
 	return c, nil
 }
 
+func updateVulcandOrDie(timeout time.Duration, mutator func() error) {
+	timeoutC := time.After(timeout)
+	for {
+		select {
+		case <-timeoutC:
+			log.WithFields(log.Fields{"timeout": timeout}).Fatal("Failed to update vulcand within timeout")
+		default:
+			if err := mutator(); err != nil {
+				delay := 50 * time.Millisecond
+				log.WithFields(log.Fields{"error": err, "retryIn": delay}).Info("Failed attempt to update vulcand. May retry if time remains.")
+				time.Sleep(delay)
+			} else {
+				log.Debug("Updated vulcand using mutator")
+				return
+			}
+		}
+	}
+}
+
+func getServersForService(client VulcandClient, serviceID string) (map[vulcand.ServerKey]vulcand.Server, error) {
+	backendKey := vulcand.BackendKey{Id: serviceID}
+	serverMap := make(map[vulcand.ServerKey]vulcand.Server)
+	servers, err := client.GetServers(backendKey)
+	if err != nil {
+		return nil, err
+	}
+	for _, server := range servers {
+		serverKey := serverKeyFromBackendKeyAndServer(backendKey, server)
+		serverMap[serverKey] = server
+	}
+	return serverMap, nil
+}
+
+func removeServersForService(client VulcandClient, serviceID string, servers map[vulcand.ServerKey]vulcand.Server) error {
+	backendKey := vulcand.BackendKey{Id:serviceID}
+	for _, s := range servers {
+		serverKey := serverKeyFromBackendKeyAndServer(backendKey, s)
+		if err := client.DeleteServer(serverKey); err != nil {
+			log.WithFields(log.Fields{
+				"serverID":  s.Id,
+				"error":     err,
+				"serviceID": serviceID,
+			}).Debug("Error deleting Vulcand server for Kubernetes service")
+			return err
+		}
+		delete(servers, serverKey)
+	}
+	return nil
+}
+
 func testVulcandConnectivity(client *vulcandAPI.Client) error {
 	return client.GetStatus()
 }
@@ -62,5 +114,6 @@ func newVulcandServer(ip string, port int) (*vulcand.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return vulcand.NewServer(ip, serverURL.String())
+	serverID := fmt.Sprintf("%v.%v", ip, port)
+	return vulcand.NewServer(serverID, serverURL.String())
 }

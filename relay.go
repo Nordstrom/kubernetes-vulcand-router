@@ -15,8 +15,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -32,10 +33,12 @@ import (
 )
 
 const (
-	labelRoutedService            = "vulcand.io/routed"
-	annotationsKeyRouteExpression = "vulcand.io/route-expression"
-	annotationsKeyRoutedPortNames = "vulcand.io/routed-port-names"
+	LabelServiceHTTPRouted     = "vulcand.io/http-routed"
+	AnnotationsKeyServiceRoute = "vulcand.io/route"
+	ServiceEndpointPortName    = "http"
 )
+
+var ErrorCouldNotFindRouteExpression = errors.New("Could not find route expression for service")
 
 type KubernetesVulcandRouterRelay interface {
 	Start() error
@@ -65,6 +68,8 @@ type relay struct {
 	endpointsStore       kubeCache.Store
 	serviceController    *kubeFramework.Controller
 	endpointsController  *kubeFramework.Controller
+	apiserverURL         *url.URL
+	vulcandURL           *url.URL
 	vulcandUpdateTimeout time.Duration
 	stopC                chan struct{}
 	mlock                sync.Mutex
@@ -78,23 +83,29 @@ func NewRelay(apiserverURLString, vulcandAdminURLString string, resyncPeriod, vu
 	)
 
 	if kClient, err = newKubeClient(apiserverURLString); err != nil {
-		return nil, fmt.Errorf("Unable to create Kubernetes API client. Error: %v", err)
+		// return nil, fmt.Errorf("Unable to create Kubernetes API client. Error: %v", err)
+		return nil, err
 	}
 	if vClient, err = newVulcandClient(vulcandAdminURLString); err != nil {
-		return nil, fmt.Errorf("Unable to create Vulcand API client. Error: %v", err)
+		// return nil, fmt.Errorf("Unable to create Vulcand API client. Error: %v", err)
+		return nil, err
 	}
+	kURL, _ := url.Parse(apiserverURLString)
+	vURL, _ := url.Parse(vulcandAdminURLString)
 
-	rly := relay{
+	rly := &relay{
 		kubeClient:           kClient,
 		vulcandClient:        vClient,
 		vulcandUpdateTimeout: vulcandUpdateTimeout,
+		apiserverURL:         kURL,
+		vulcandURL:           vURL,
 		stopC:                make(chan struct{}),
 	}
 
-	rly.serviceStore, rly.serviceController = buildServiceWatch(kClient, &rly, labelRoutedService, resyncPeriod)
-	rly.endpointsStore, rly.endpointsController = buildEndpointsWatch(kClient, &rly, labelRoutedService, resyncPeriod)
+	rly.serviceStore, rly.serviceController = buildServiceWatch(kClient, rly, LabelServiceHTTPRouted, resyncPeriod)
+	rly.endpointsStore, rly.endpointsController = buildEndpointsWatch(kClient, rly, LabelServiceHTTPRouted, resyncPeriod)
 
-	return &rly, nil
+	return rly, nil
 }
 
 func (rly *relay) Start() error {
@@ -122,10 +133,11 @@ func (rly *relay) Stop() {
 
 func (rly *relay) testKubeConnectivity() error {
 	// if kClient, ok := rly.kubeClient.(*kubeClient.Client); ok {
-	// 	labelSelector := kubeLabels.Everything().Add(labelRoutedService, kubeLabels.ExistsOperator, nil)
+	// 	labelSelector := kubeLabels.Everything().Add(LabelServiceHTTPRouted, kubeLabels.ExistsOperator, nil)
 	// 	return testKubeConnectivity(kClient, labelSelector)
 	// }
 	// return fmt.Errorf("Unable to type assert kubeClient as kubeAPI.Client.")
+	log.WithField("apiserverURL", rly.apiserverURL).Debug("Testing connectivity to Kubernetes apiserver")
 	_, err := rly.kubeClient.ServerVersion()
 	return err
 }
@@ -135,11 +147,11 @@ func (rly *relay) testVulcandConnectivity() error {
 	// 	return testVulcandConnectivity(vClient)
 	// }
 	// return fmt.Errorf("Unable to type assert vulcandClient as vulcandAPI.Client.")
+	log.WithField("vulcandURL", rly.vulcandURL).Debug("Testing connectivity with Vulcand Admin API")
 	return rly.vulcandClient.GetStatus()
 }
 
 func (rly *relay) AddService(obj interface{}) {
-	log.WithField("service", obj).Debug("Adding service")
 	if s, ok := obj.(*kubeAPI.Service); ok {
 		var (
 			err      error
@@ -147,7 +159,12 @@ func (rly *relay) AddService(obj interface{}) {
 			frontend *vulcand.Frontend
 		)
 		serviceID := vulcandID(s)
-		if backend, err = vulcandBackendFromService(s); err != nil {
+		if s.Spec.Type != kubeAPI.ServiceTypeClusterIP || kubeAPI.IsServiceIPSet(s) {
+			log.WithField("serviceID", serviceID).Debug("Not adding service")
+			return
+		}
+		log.WithField("serviceID", serviceID).Debug("Adding service")
+		if backend, err = newVulcandBackend(serviceID); err != nil {
 			log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not create vulcand backend")
 			return
 		}
@@ -171,18 +188,19 @@ func (rly *relay) DeleteService(obj interface{}) {
 	log.WithField("service", obj).Debug("Deleting service")
 
 	if s, ok := obj.(*kubeAPI.Service); ok {
-		existingServersMap, err := rly.getServersFromService(s)
+		remainingServersMap, err := rly.getServersForService(s)
 		if err != nil {
 			log.WithField("service", s).Info("Unable to retrieve Vulcand Servers for Kubernetes service")
 		}
 		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
 			serviceID := vulcandID(s)
-			if err = rly.removeServersForService(s, existingServersMap); err != nil {
+			if err := rly.removeServersForService(s, remainingServersMap); err != nil {
 				log.WithFields(log.Fields{
-					"serviceID": serviceID,
-					"servers":   existingServersMap,
-					"error":     err,
+					"serviceID":         serviceID,
+					"serversForService": remainingServersMap,
+					"error":             err,
 				}).Warn("Unable to remove Vulcand Servers for Kubernetes service")
+				return err
 			}
 			if err := rly.vulcandClient.DeleteFrontend(vulcand.FrontendKey{Id: serviceID}); err != nil {
 				log.WithField("serviceID", serviceID).Warn("Unable to remove Vulcand Frontend for Kubernetes service")
@@ -192,6 +210,7 @@ func (rly *relay) DeleteService(obj interface{}) {
 				log.WithField("serviceID", serviceID).Warn("Unable to remove Vulcand Backend for Kubernetes service")
 				return err
 			}
+			log.WithField("serviceID", serviceID).Debug("Successfully removed Vulcand Servers, Frontend, and Backend for Kubernetes service")
 			return nil
 		})
 	}
@@ -202,45 +221,42 @@ func (rly *relay) UpdateService(oldObj interface{}, newObj interface{}) {
 	rly.AddService(newObj)
 }
 
-func (rly *relay) AddEndpoint(obj interface{}) {
+func (rly *relay) SyncEndpoints(obj interface{}) {
 	if e, ok := obj.(*kubeAPI.Endpoints); ok {
-		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error { return rly.addServersUsingEndpoints(e) })
+		svc, err := rly.getServiceForEndpoints(e)
+		if err != nil {
+			return
+		}
+		if svc == nil || kubeAPI.IsServiceIPSet(svc) {
+			log.WithField("serviceID", vulcandID(svc)).Debug("No headless service found corresponding to Endpoints.")
+			return
+		}
+		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
+			return rly.syncServersUsingEndpoints(e, svc)
+		})
 	}
 }
 
-func (rly *relay) addServersUsingEndpoints(e *kubeAPI.Endpoints) error {
+func (rly *relay) syncServersUsingEndpoints(e *kubeAPI.Endpoints, svc *kubeAPI.Service) error {
 	rly.mlock.Lock()
 	defer rly.mlock.Unlock()
-	svc, err := rly.getServiceFromEndpoints(e)
-	if err != nil {
-		return err
-	}
-	if svc == nil || kubeAPI.IsServiceIPSet(svc) {
-		log.WithField("endpoints", e).Info("No headless service found corresponding to Endpoints.")
-		return nil
-	}
 
 	return rly.syncServersForHeadlessService(e, svc)
 }
 
 func (rly *relay) syncServersForHeadlessService(e *kubeAPI.Endpoints, svc *kubeAPI.Service) error {
-	routedPorts, err := getRoutedPortNamesFromService(svc)
-	if err != nil {
-		return fmt.Errorf("Unable to retrieve routed ports from service: %v. Error: %v", svc, err)
-	}
-
 	backendKey := backendKeyFromService(svc)
-	existingServersMap, err := rly.getServersFromService(svc)
+	remainingServersMap, err := rly.getServersForService(svc)
 	if err != nil {
-		log.WithField("service", svc).Info("Unable to retrieve Vulcand Servers for Kubernetes service")
+		// return fmt.Errorf("Unable to retrieve Vulcand Servers for Kubernetes service: %v", vulcandID(svc))
+		return err
 	}
 
 	for idx := range e.Subsets {
 		for subIdx := range e.Subsets[idx].Addresses {
 			for portIdx := range e.Subsets[idx].Ports {
 				endpointPort := &e.Subsets[idx].Ports[portIdx]
-				// portSegment := buildPortSegmentString(endpointPort.Name, endpointPort.Protocol)
-				if _, ok := routedPorts[endpointPort.Name]; ok {
+				if endpointPort.Name == ServiceEndpointPortName {
 					addr := e.Subsets[idx].Addresses[subIdx].IP
 					s, err := newVulcandServer(addr, endpointPort.Port)
 					if err != nil {
@@ -248,66 +264,32 @@ func (rly *relay) syncServersForHeadlessService(e *kubeAPI.Endpoints, svc *kubeA
 						continue
 					}
 					srv := *s
-					delete(existingServersMap, serverKeyFromBackendKeyAndServer(backendKey, srv))
 					err = rly.vulcandClient.UpsertServer(backendKey, srv, 0)
 					if err != nil {
 						log.WithFields(log.Fields{"server": srv, "error": err}).Warn("Unable to upsert vulcand server")
 						continue
 					}
+					delete(remainingServersMap, serverKeyFromBackendKeyAndServer(backendKey, srv))
 				}
 			}
 		}
 	}
 
-	err = rly.removeServersForService(svc, existingServersMap)
+	err = rly.removeServersForService(svc, remainingServersMap)
 
 	return nil
 }
 
-func (rly *relay) getServersFromService(s *kubeAPI.Service) (map[vulcand.ServerKey]vulcand.Server, error) {
-	backendKey := vulcand.BackendKey{Id: vulcandID(s)}
-	serverMap := make(map[vulcand.ServerKey]vulcand.Server)
-	servers, err := rly.vulcandClient.GetServers(backendKey)
-	if err != nil {
-		return nil, err
-	}
-	for _, server := range servers {
-		serverMap[serverKeyFromBackendKeyAndServer(backendKey, server)] = server
-	}
-	return serverMap, nil
+func (rly *relay) getServiceForEndpoints(e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
+	return getServiceForEndpoints(rly.serviceStore, e)
 }
 
-func (rly *relay) getServiceFromEndpoints(e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
-	return getServiceFromEndpoints(rly.serviceStore, e)
+func (rly *relay) getServersForService(s *kubeAPI.Service) (map[vulcand.ServerKey]vulcand.Server, error) {
+	return getServersForService(rly.vulcandClient, vulcandID(s))
 }
 
-func (rly *relay) removeServersForService(service *kubeAPI.Service, servers map[vulcand.ServerKey]vulcand.Server) error {
-	backendKey := backendKeyFromService(service)
-	for _, s := range servers {
-		if err := rly.vulcandClient.DeleteServer(serverKeyFromBackendKeyAndServer(backendKey, s)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func updateVulcandOrDie(timeout time.Duration, mutator func() error) {
-	timeoutC := time.After(timeout)
-	for {
-		select {
-		case <-timeoutC:
-			log.WithFields(log.Fields{"timeout": timeout}).Fatal("Failed to update vulcand within timeout")
-		default:
-			if err := mutator(); err != nil {
-				delay := 50 * time.Millisecond
-				log.WithFields(log.Fields{"error": err, "retryIn": delay}).Info("Failed attempt to update vulcand. May retry if time remains.")
-				time.Sleep(delay)
-			} else {
-				log.Debug("Updated vulcand using mutator")
-				return
-			}
-		}
-	}
+func (rly *relay) removeServersForService(svc *kubeAPI.Service, servers map[vulcand.ServerKey]vulcand.Server) error {
+	return removeServersForService(rly.vulcandClient, vulcandID(svc), servers)
 }
 
 func backendKeyFromService(service *kubeAPI.Service) vulcand.BackendKey {
@@ -318,49 +300,22 @@ func serverKeyFromBackendKeyAndServer(backendKey vulcand.BackendKey, server vulc
 	return vulcand.ServerKey{BackendKey: backendKey, Id: server.Id}
 }
 
-func vulcandBackendFromService(svc *kubeAPI.Service) (*vulcand.Backend, error) {
-	return newVulcandBackend(vulcandID(svc))
-}
-
-func vulcandFrontendFromBackendAndService(be vulcand.Backend, svc *kubeAPI.Service) (*vulcand.Frontend, error) {
+func vulcandFrontendFromBackendAndService(backend vulcand.Backend, svc *kubeAPI.Service) (*vulcand.Frontend, error) {
 	route, err := routeExpressionFromService(svc)
 	if err != nil {
 		return nil, err
 	}
-	return newVulcandFrontend(vulcandID(svc), be.Id, route)
-}
-
-func getRoutedPortNamesFromService(e *kubeAPI.Service) (map[string]bool, error) {
-	var routedPortNames []string
-	var portNames map[string]bool
-	var err error
-	if routedPortNames, err = routedPortNamesFromService(e); err != nil {
-		return nil, err
-	}
-
-	for _, name := range routedPortNames {
-		portNames[name] = true
-	}
-
-	return portNames, nil
-}
-
-func routedPortNamesFromService(svc *kubeAPI.Service) ([]string, error) {
-	routedPorts, ok := svc.Annotations[annotationsKeyRoutedPortNames]
-	if !ok {
-		return []string{}, fmt.Errorf("Could not find routed port names for service %v", vulcandID(svc))
-	}
-	return strings.Split(routedPorts, ","), nil
+	return newVulcandFrontend(vulcandID(svc), backend.Id, route)
 }
 
 func routeExpressionFromService(svc *kubeAPI.Service) (string, error) {
-	route, ok := svc.Annotations[annotationsKeyRouteExpression]
+	route, ok := svc.Annotations[AnnotationsKeyServiceRoute]
 	if !ok {
-		return "", fmt.Errorf("Could not find route expression for service %v", vulcandID(svc))
+		return "", ErrorCouldNotFindRouteExpression
 	}
 	return route, nil
 }
 
 func vulcandID(s *kubeAPI.Service) string {
-	return strings.Join([]string{s.Namespace, s.Name}, "-")
+	return fmt.Sprintf("%v-%v", s.Namespace, s.Name)
 }

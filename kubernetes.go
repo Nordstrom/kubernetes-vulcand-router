@@ -37,7 +37,7 @@ type ServicesWatcher interface {
 }
 
 type EndpointsWatcher interface {
-	AddEndpoint(obj interface{})
+	SyncEndpoints(obj interface{})
 }
 
 /**
@@ -61,10 +61,10 @@ func newKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.Host = apiserverURLString
+	config.Host = u.String()
 	config.Version = "v1"
 
-	log.WithFields(log.Fields{"host": config.Host, "apiVersion": config.Version}).Debug("Creating kubernetes API client")
+	log.WithFields(log.Fields{"apiserverURL": config.Host, "apiVersion": config.Version}).Debug("Creating kubernetes API client")
 
 	return kubeClient.New(config)
 }
@@ -94,23 +94,24 @@ func buildEndpointsWatch(client *kubeClient.Client, watcher EndpointsWatcher, ta
 		&kubeAPI.Endpoints{},
 		resyncPeriod,
 		kubeFramework.ResourceEventHandlerFuncs{
-			AddFunc: watcher.AddEndpoint,
+			AddFunc:    watcher.SyncEndpoints,
+			DeleteFunc: watcher.SyncEndpoints,
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				// TODO: Avoid unwanted updates.
-				watcher.AddEndpoint(newObj)
+				watcher.SyncEndpoints(newObj)
 			},
 		},
 	)
 }
 
-func getServiceFromEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
+func getServiceForEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
 	var (
-		err error
-		key string
-		obj interface{}
+		err    error
+		key    string
+		obj    interface{}
 		exists bool
-		ok bool
-		svc *kubeAPI.Service
+		ok     bool
+		svc    *kubeAPI.Service
 	)
 	if key, err = kubeCache.MetaNamespaceKeyFunc(e); err != nil {
 		return nil, err
@@ -130,14 +131,10 @@ func getServiceFromEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints)
 
 // Returns a kubeCache.ListWatch that gets all changes to services.
 func buildServiceLW(client *kubeClient.Client) *kubeCache.ListWatch {
-	return buildLW(client, "services")
+	return kubeCache.NewListWatchFromClient(client, "services", kubeAPI.NamespaceAll, kubeFields.Everything())
 }
 
 // Returns a kubeCache.ListWatch that gets all changes to endpoints.
 func buildEndpointsLW(client *kubeClient.Client) *kubeCache.ListWatch {
-	return buildLW(client, "endpoints")
-}
-
-func buildLW(client *kubeClient.Client, target string) *kubeCache.ListWatch {
-	return kubeCache.NewListWatchFromClient(client, target, kubeAPI.NamespaceAll, kubeFields.Everything())
+	return kubeCache.NewListWatchFromClient(client, "endpoints", kubeAPI.NamespaceAll, kubeFields.Everything())
 }

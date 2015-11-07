@@ -1,8 +1,8 @@
 name := kubernetes-vulcand-router
 container_name := $(name)
-release := 0.0.2-dev
+release := 0.1.0-dev
 
-.PHONY: all build/container release/container deploy undeploy
+.PHONY: all build/container tag/container release/container deploy undeploy
 
 all:
 	
@@ -12,8 +12,10 @@ build/$(name)-linux-amd64: *.go Makefile
 build/container: build/$(name)-linux-amd64
 	docker build -t $(container_name) .
 
-release/container: build/container
+tag/container: build/container
 	docker tag -f $(container_name) nordstrom/$(container_name):$(release)
+
+release/container: tag/container
 	docker push nordstrom/$(container_name):$(release)
 
 deploy: deploy/service deploy/rc
