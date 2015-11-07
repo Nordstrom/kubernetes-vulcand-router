@@ -23,14 +23,14 @@ import (
 
 var argAPIServerHostPort string
 var argVulcandURLString string
-var argResyncPeriod time.Duration
+var argResyncDuration time.Duration
 var argVulcandTimeout time.Duration
 
 func init() {
 	flag.StringVar(&argAPIServerHostPort, "apiserver", "", "Kubernetes apiserver host:port")
 	flag.StringVar(&argVulcandURLString, "vulcand", "", "Vulcand Admin URL")
-	flag.DurationVar(&argResyncPeriod, "resync", 30 * time.Second, "Resync period (in seconds)")
-	flag.DurationVar(&argVulcandTimeout, "vulcan-timeout", 10 * time.Second, "Vulcand update timeout (in seconds)")
+	flag.DurationVar(&argResyncDuration, "resync", 30 * time.Minute, "Resync period")
+	flag.DurationVar(&argVulcandTimeout, "vulcand-timeout", 10 * time.Second, "Vulcand update timeout")
 
 	flag.Parse()
 
@@ -43,7 +43,7 @@ func init() {
 }
 
 func main() {
-	relay, err := NewRelay(argAPIServerHostPort, argVulcandURLString, argResyncPeriod, argVulcandTimeout)
+	relay, err := NewRelay(argAPIServerHostPort, argVulcandURLString, argResyncDuration, argVulcandTimeout)
 	if err != nil {
 		log.WithField("error", err).Fatal("Unable to create Kubernetes Vulcand Router relay")
 	}
@@ -55,7 +55,4 @@ func main() {
 
 	// select {}
 	time.Sleep(10 * time.Second)
-	defer relay.Stop()
-	time.Sleep(10 * time.Second)
-
 }

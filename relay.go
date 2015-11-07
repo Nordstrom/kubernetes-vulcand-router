@@ -28,6 +28,7 @@ import (
 	kubeCache "k8s.io/kubernetes/pkg/client/cache"
 	kubeClient "k8s.io/kubernetes/pkg/client/unversioned"
 	kubeFramework "k8s.io/kubernetes/pkg/controller/framework"
+	kubeVersion "k8s.io/kubernetes/pkg/version"
 )
 
 const (
@@ -39,6 +40,22 @@ const (
 type KubernetesVulcandRouterRelay interface {
 	Start() error
 	Stop()
+}
+
+type KubeClient interface {
+	ServerVersion() (*kubeVersion.Info, error)
+	Endpoints(namespace string) kubeClient.EndpointsInterface
+}
+
+type VulcandClient interface {
+	GetStatus() error
+	UpsertBackend(vulcand.Backend) error
+	DeleteBackend(vulcand.BackendKey) error
+	UpsertFrontend(vulcand.Frontend, time.Duration) error
+	DeleteFrontend(vulcand.FrontendKey) error
+	GetServers(vulcand.BackendKey) ([]vulcand.Server, error)
+	UpsertServer(vulcand.BackendKey, vulcand.Server, time.Duration) error
+	DeleteServer(vulcand.ServerKey) error
 }
 
 type relay struct {
@@ -74,14 +91,22 @@ func NewRelay(apiserverURLString, vulcandAdminURLString string, resyncPeriod, vu
 		stopC:                make(chan struct{}),
 	}
 
-	rly.serviceStore, rly.serviceController = buildServiceWatch(kClient, &rly, resyncPeriod)
-	rly.endpointsStore, rly.endpointsController = buildEndpointsWatch(kClient, &rly, resyncPeriod)
+	rly.serviceStore, rly.serviceController = buildServiceWatch(kClient, &rly, labelRoutedService, resyncPeriod)
+	rly.endpointsStore, rly.endpointsController = buildEndpointsWatch(kClient, &rly, labelRoutedService, resyncPeriod)
 
 	return &rly, nil
 }
 
 func (rly *relay) Start() error {
-	log.Debug("Starting relay")
+	log.Info("Starting relay")
+
+	if err := rly.testKubeConnectivity(); err != nil {
+		return err
+	}
+
+	if err := rly.testVulcandConnectivity(); err != nil {
+		return err
+	}
 
 	go rly.serviceController.Run(rly.stopC)
 	go rly.endpointsController.Run(rly.stopC)
@@ -90,9 +115,27 @@ func (rly *relay) Start() error {
 }
 
 func (rly *relay) Stop() {
-	log.WithField("relay", rly).Debug("Stopping relay")
+	log.Info("Stopping relay")
 
 	defer close(rly.stopC)
+}
+
+func (rly *relay) testKubeConnectivity() error {
+	// if kClient, ok := rly.kubeClient.(*kubeClient.Client); ok {
+	// 	labelSelector := kubeLabels.Everything().Add(labelRoutedService, kubeLabels.ExistsOperator, nil)
+	// 	return testKubeConnectivity(kClient, labelSelector)
+	// }
+	// return fmt.Errorf("Unable to type assert kubeClient as kubeAPI.Client.")
+	_, err := rly.kubeClient.ServerVersion()
+	return err
+}
+
+func (rly *relay) testVulcandConnectivity() error {
+	// if vClient, ok := rly.vulcandClient.(*vulcandAPI.Client); ok {
+	// 	return testVulcandConnectivity(vClient)
+	// }
+	// return fmt.Errorf("Unable to type assert vulcandClient as vulcandAPI.Client.")
+	return rly.vulcandClient.GetStatus()
 }
 
 func (rly *relay) AddService(obj interface{}) {

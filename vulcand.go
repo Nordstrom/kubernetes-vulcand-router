@@ -18,28 +18,17 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"time"
 
-	"github.com/mailgun/vulcand/api"
-	"github.com/mailgun/vulcand/engine"
+	vulcandAPI "github.com/mailgun/vulcand/api"
+	vulcand "github.com/mailgun/vulcand/engine"
 	// "github.com/mailgun/vulcand/plugin"
-	"github.com/mailgun/vulcand/plugin/registry"
+	vulcandRegistry "github.com/mailgun/vulcand/plugin/registry"
 )
-
-type VulcandClient interface {
-	UpsertBackend(engine.Backend) error
-	DeleteBackend(engine.BackendKey) error
-	UpsertFrontend(engine.Frontend, time.Duration) error
-	DeleteFrontend(engine.FrontendKey) error
-	GetServers(engine.BackendKey) ([]engine.Server, error)
-	UpsertServer(engine.BackendKey, engine.Server, time.Duration) error
-	DeleteServer(engine.ServerKey) error
-}
 
 /**
 Initialize an etcd API client
 */
-func newVulcandClient(vulcandAdminURLString string) (*api.Client, error) {
+func newVulcandClient(vulcandAdminURLString string) (*vulcandAPI.Client, error) {
 	var u *url.URL
 	var err error
 	if u, err = url.Parse(os.ExpandEnv(vulcandAdminURLString)); err != nil {
@@ -49,25 +38,29 @@ func newVulcandClient(vulcandAdminURLString string) (*api.Client, error) {
 		return nil, fmt.Errorf("Invalid URL provided for Vulcand API server: %v.", u)
 	}
 
-	c := api.NewClient(vulcandAdminURLString, registry.GetRegistry())
+	c := vulcandAPI.NewClient(vulcandAdminURLString, vulcandRegistry.GetRegistry())
 	if c == nil {
 		return nil, fmt.Errorf("Could not initialize Vulcand API client")
 	}
 	return c, nil
 }
 
-func newVulcandBackend(id string) (*engine.Backend, error) {
-	return engine.NewHTTPBackend(id, engine.HTTPBackendSettings{})
+func testVulcandConnectivity(client *vulcandAPI.Client) error {
+	return client.GetStatus()
 }
 
-func newVulcandFrontend(id, backendID, routeExpr string) (*engine.Frontend, error) {
-	return engine.NewHTTPFrontend(id, backendID, routeExpr, engine.HTTPFrontendSettings{})
+func newVulcandBackend(id string) (*vulcand.Backend, error) {
+	return vulcand.NewHTTPBackend(id, vulcand.HTTPBackendSettings{})
 }
 
-func newVulcandServer(ip string, port int) (*engine.Server, error) {
+func newVulcandFrontend(id, backendID, routeExpr string) (*vulcand.Frontend, error) {
+	return vulcand.NewHTTPFrontend(id, backendID, routeExpr, vulcand.HTTPFrontendSettings{})
+}
+
+func newVulcandServer(ip string, port int) (*vulcand.Server, error) {
 	serverURL, err := url.Parse(fmt.Sprintf("http://%v:%v/", ip, port))
 	if err != nil {
 		return nil, err
 	}
-	return engine.NewServer(ip, serverURL.String())
+	return vulcand.NewServer(ip, serverURL.String())
 }

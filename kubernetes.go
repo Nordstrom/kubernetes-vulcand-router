@@ -26,15 +26,9 @@ import (
 	kubeCache "k8s.io/kubernetes/pkg/client/cache"
 	kubeClient "k8s.io/kubernetes/pkg/client/unversioned"
 	kubeClientCmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	// kubeClientCmdAPI "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	kubeFramework "k8s.io/kubernetes/pkg/controller/framework"
 	kubeFields "k8s.io/kubernetes/pkg/fields"
-	// kubeUtil "k8s.io/kubernetes/pkg/util"
 )
-
-type KubeClient interface {
-	Endpoints(namespace string) kubeClient.EndpointsInterface
-}
 
 type ServicesWatcher interface {
 	AddService(obj interface{})
@@ -60,26 +54,7 @@ func newKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
 	}
 
 	loadingRules := kubeClientCmd.NewDefaultClientConfigLoadingRules()
-
 	configOverrides := &kubeClientCmd.ConfigOverrides{}
-	// configOverrides := &kubeClientCmd.ConfigOverrides{
-	// 	AuthInfo: kubeClientCmdAPI.AuthInfo{
-	// 		LocationOfOrigin:  "swarm",
-	// 		ClientCertificate: clientCertificate,
-	// 		ClientKey:         clientKey,
-	// 		Token:             token,
-	// 		Username:          username,
-	// 		Password:          password,
-	// 	},
-	// 	ClusterInfo: kubeClientCmdAPI.Cluster{
-	// 		LocationOfOrigin:      "swarm",
-	// 		Server:                master,
-	// 		APIVersion:            apiVersion,
-	// 		InsecureSkipTLSVerify: insecureSkipTLSVerify,
-	// 		CertificateAuthority:  certificateAuthority,
-	// 	},
-	// }
-
 	kubeConfig := kubeClientCmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
 	config, err := kubeConfig.ClientConfig()
@@ -94,7 +69,13 @@ func newKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
 	return kubeClient.New(config)
 }
 
-func buildServiceWatch(client *kubeClient.Client, watcher ServicesWatcher, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
+// func testKubeConnectivity(client *kubeClient.Client, labelSelector kubeLabels.Selector) error {
+// 	// _, err := client.Services(kubeAPI.NamespaceDefault).List(labelSelector)
+// 	_, err := client.ServerVersion()
+// 	return err
+// }
+
+func buildServiceWatch(client *kubeClient.Client, watcher ServicesWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
 	return kubeFramework.NewInformer(
 		buildServiceLW(client),
 		&kubeAPI.Service{},
@@ -107,7 +88,7 @@ func buildServiceWatch(client *kubeClient.Client, watcher ServicesWatcher, resyn
 	)
 }
 
-func buildEndpointsWatch(client *kubeClient.Client, watcher EndpointsWatcher, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
+func buildEndpointsWatch(client *kubeClient.Client, watcher EndpointsWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
 	return kubeFramework.NewInformer(
 		buildEndpointsLW(client),
 		&kubeAPI.Endpoints{},
