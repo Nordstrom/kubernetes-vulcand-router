@@ -28,6 +28,9 @@ import (
 	kubeClientCmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	kubeFramework "k8s.io/kubernetes/pkg/controller/framework"
 	kubeFields "k8s.io/kubernetes/pkg/fields"
+	kubeLabels "k8s.io/kubernetes/pkg/labels"
+	kubeRuntime "k8s.io/kubernetes/pkg/runtime"
+	kubeWatch "k8s.io/kubernetes/pkg/watch"
 )
 
 type ServicesWatcher interface {
@@ -131,10 +134,44 @@ func getServiceForEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints) 
 
 // Returns a kubeCache.ListWatch that gets all changes to services.
 func buildServiceLW(client *kubeClient.Client) *kubeCache.ListWatch {
-	return kubeCache.NewListWatchFromClient(client, "services", kubeAPI.NamespaceAll, kubeFields.Everything())
+	return buildLW(client, "services", nil)
 }
 
 // Returns a kubeCache.ListWatch that gets all changes to endpoints.
 func buildEndpointsLW(client *kubeClient.Client) *kubeCache.ListWatch {
-	return kubeCache.NewListWatchFromClient(client, "endpoints", kubeAPI.NamespaceAll, kubeFields.Everything())
+	return buildLW(client, "endpoints", kubeLabels.Everything().Add(LabelServiceHTTPRouted, kubeLabels.ExistsOperator, []string{}))
+}
+
+// Returns a kubeCache.ListWatch that gets all changes to endpoints.
+func buildLW(client *kubeClient.Client, resource string, labelSelector kubeLabels.Selector) *kubeCache.ListWatch {
+	return newListWatchFromClient(
+		client,
+		resource,
+		kubeAPI.NamespaceAll,
+		labelSelector,
+		kubeFields.Everything())
+}
+
+// copied (with slight modifications) from: k8s.io/kubernetes/pkg/client/cache NewListWatchFromClient
+func newListWatchFromClient(c kubeCache.Getter, resource string, namespace string, labelSelector kubeLabels.Selector, fieldSelector kubeFields.Selector) *kubeCache.ListWatch {
+	listFunc := func() (kubeRuntime.Object, error) {
+		return c.Get().
+			Namespace(namespace).
+			Resource(resource).
+			LabelsSelectorParam(labelSelector).
+			FieldsSelectorParam(fieldSelector).
+			Do().
+			Get()
+	}
+	watchFunc := func(resourceVersion string) (kubeWatch.Interface, error) {
+		return c.Get().
+			Prefix("watch").
+			Namespace(namespace).
+			Resource(resource).
+			LabelsSelectorParam(labelSelector).
+			FieldsSelectorParam(fieldSelector).
+			Param("resourceVersion", resourceVersion).
+			Watch()
+	}
+	return &kubeCache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
 }
