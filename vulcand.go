@@ -27,10 +27,7 @@ import (
 	vulcandRegistry "github.com/mailgun/vulcand/plugin/registry"
 )
 
-/**
-Initialize an etcd API client
-*/
-func newVulcandClient(vulcandAdminURLString string) (*vulcandAPI.Client, error) {
+func NewVulcandClient(vulcandAdminURLString string) (*vulcandAPI.Client, error) {
 	var u *url.URL
 	var err error
 	if u, err = url.Parse(os.ExpandEnv(vulcandAdminURLString)); err != nil {

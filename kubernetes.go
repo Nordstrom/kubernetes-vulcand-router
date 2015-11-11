@@ -43,10 +43,7 @@ type EndpointsWatcher interface {
 	SyncEndpoints(obj interface{})
 }
 
-/**
-Initialize a kubernetes API client
-*/
-func newKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
+func NewKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
 	var u *url.URL
 	var err error
 	if u, err = url.Parse(os.ExpandEnv(apiserverURLString)); err != nil {

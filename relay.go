@@ -82,11 +82,11 @@ func NewRelay(apiserverURLString, vulcandAdminURLString string, resyncPeriod, vu
 		kClient *kubeClient.Client
 	)
 
-	if kClient, err = newKubeClient(apiserverURLString); err != nil {
+	if kClient, err = NewKubeClient(apiserverURLString); err != nil {
 		// return nil, fmt.Errorf("Unable to create Kubernetes API client. Error: %v", err)
 		return nil, err
 	}
-	if vClient, err = newVulcandClient(vulcandAdminURLString); err != nil {
+	if vClient, err = NewVulcandClient(vulcandAdminURLString); err != nil {
 		// return nil, fmt.Errorf("Unable to create Vulcand API client. Error: %v", err)
 		return nil, err
 	}
