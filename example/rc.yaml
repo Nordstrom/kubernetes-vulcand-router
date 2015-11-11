@@ -21,7 +21,7 @@ spec:
         image: nordstrom/kubernetes-vulcand-router:0.1.0-dev
         imagePullPolicy: Always
         args: 
-          - "-apiserver=http://sst-rfid-emmanuel.dev.nlab.io"
+          - "-apiserver=http://25.0.0.1"
           - "-vulcand=http://127.0.0.1:8182"
       - name: router
         image: mailgun/vulcand:v0.8.0-beta.2
@@ -39,6 +39,13 @@ spec:
             name: vulcand-http
           - containerPort: 8182
             name: vulcand-api
+        livenessProbe:
+          httpGet:
+            # Path to probe; should be cheap, but representative of typical behavior
+            path: /status/v2
+            port: 8182
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
       - name: etcd
         image: quay.io/coreos/etcd:v2.2.1
         args: 
@@ -48,7 +55,14 @@ spec:
           - "--listen-peer-urls=http://127.0.0.1:2380"
           - "--name=k8s-vulcand-router-etcd"
         ports:
-          - containerPort: 2379
-            name: etcd-http
-          - containerPort: 2380
-            name: etcd-peer
+          - name: etcd-http
+            containerPort: 2379
+          - name: etcd-peer
+            containerPort: 2380
+        # livenessProbe:
+        #   httpGet:
+        #     # Path to probe; should be cheap, but representative of typical behavior
+        #     path: /status/v2
+        #     port: 2379
+        #   initialDelaySeconds: 30
+        #   timeoutSeconds: 1

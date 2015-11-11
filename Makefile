@@ -17,19 +17,3 @@ tag/container: build/container
 
 release/container: tag/container
 	docker push nordstrom/$(container_name):$(release)
-
-deploy: deploy/service deploy/rc
-
-deploy/service:
-	kubectl create --validate -f svc.yaml
-
-deploy/rc:
-	kubectl create --validate -f rc.yaml
-
-undeploy: undeploy/service undeploy/rc
-
-undeploy/service:
-	kubectl delete --validate -f svc.yaml
-
-undeploy/rc:
-	kubectl delete --validate -f rc.yaml
