@@ -1,6 +1,6 @@
 name := kubernetes-vulcand-router
 container_name := $(name)
-release := 0.1.0-dev
+release := 0.1.1-dev
 
 .PHONY: all build/container tag/container release/container deploy undeploy
 
