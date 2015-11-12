@@ -228,7 +228,11 @@ func (rly *relay) SyncEndpoints(obj interface{}) {
 			return
 		}
 		if svc == nil || kubeAPI.IsServiceIPSet(svc) {
-			log.WithField("serviceID", vulcandID(svc)).Debug("No headless service found corresponding to Endpoints.")
+			svcID := ""
+			if svc != nil {
+				svcID = vulcandID(svc)
+			}
+			log.WithField("serviceID", svcID).Debug("No headless service found corresponding to Endpoints.")
 			return
 		}
 		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
