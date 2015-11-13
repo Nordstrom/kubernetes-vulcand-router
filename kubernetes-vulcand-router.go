@@ -54,5 +54,4 @@ func main() {
 	defer relay.Stop()
 
 	select {}
-	// time.Sleep(10 * time.Second)
 }
