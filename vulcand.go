@@ -52,9 +52,8 @@ func updateVulcandOrDie(timeout time.Duration, mutator func() error) {
 			log.WithFields(log.Fields{"timeout": timeout}).Fatal("Failed to update vulcand within timeout")
 		default:
 			if err := mutator(); err != nil {
-				delay := 50 * time.Millisecond
-				log.WithFields(log.Fields{"error": err, "retryIn": delay}).Info("Failed attempt to update vulcand. May retry if time remains.")
-				time.Sleep(delay)
+				log.WithField("error", err).Info("Failed attempt to update vulcand. May retry if time remains.")
+				time.Sleep(50 * time.Millisecond)
 			} else {
 				log.Debug("Updated vulcand using mutator")
 				return
@@ -63,8 +62,7 @@ func updateVulcandOrDie(timeout time.Duration, mutator func() error) {
 	}
 }
 
-func getServersForService(client VulcandClient, serviceID string) (map[vulcand.ServerKey]vulcand.Server, error) {
-	backendKey := vulcand.BackendKey{Id: serviceID}
+func getServersForBackendKey(client VulcandClient, backendKey vulcand.BackendKey) (map[vulcand.ServerKey]vulcand.Server, error) {
 	serverMap := make(map[vulcand.ServerKey]vulcand.Server)
 	servers, err := client.GetServers(backendKey)
 	if err != nil {
@@ -81,12 +79,16 @@ func removeServersForService(client VulcandClient, serviceID string, servers map
 	backendKey := vulcand.BackendKey{Id:serviceID}
 	for _, s := range servers {
 		serverKey := serverKeyFromBackendKeyAndServer(backendKey, s)
+		log.WithFields(log.Fields{
+			"serverID":  s.Id,
+			"serviceID": serviceID,
+		}).Debug("Attempting to delete Vulcand server")
 		if err := client.DeleteServer(serverKey); err != nil {
 			log.WithFields(log.Fields{
 				"serverID":  s.Id,
 				"error":     err,
 				"serviceID": serviceID,
-			}).Debug("Error deleting Vulcand server for Kubernetes service")
+			}).Warn("Error deleting Vulcand server")
 			return err
 		}
 		delete(servers, serverKey)

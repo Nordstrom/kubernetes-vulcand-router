@@ -40,7 +40,9 @@ type ServicesWatcher interface {
 }
 
 type EndpointsWatcher interface {
-	SyncEndpoints(obj interface{})
+	AddEndpoints(obj interface{})
+	DeleteEndpoints(obj interface{})
+	UpdateEndpoints(oldObj interface{}, newObj interface{})
 }
 
 func NewKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
@@ -75,35 +77,6 @@ func NewKubeClient(apiserverURLString string) (*kubeClient.Client, error) {
 // 	return err
 // }
 
-func buildServiceWatch(client *kubeClient.Client, watcher ServicesWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
-	return kubeFramework.NewInformer(
-		buildServiceLW(client),
-		&kubeAPI.Service{},
-		resyncPeriod,
-		kubeFramework.ResourceEventHandlerFuncs{
-			AddFunc:    watcher.AddService,
-			DeleteFunc: watcher.DeleteService,
-			UpdateFunc: watcher.UpdateService,
-		},
-	)
-}
-
-func buildEndpointsWatch(client *kubeClient.Client, watcher EndpointsWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
-	return kubeFramework.NewInformer(
-		buildEndpointsLW(client),
-		&kubeAPI.Endpoints{},
-		resyncPeriod,
-		kubeFramework.ResourceEventHandlerFuncs{
-			AddFunc:    watcher.SyncEndpoints,
-			DeleteFunc: watcher.SyncEndpoints,
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				// TODO: Avoid unwanted updates.
-				watcher.SyncEndpoints(newObj)
-			},
-		},
-	)
-}
-
 func getServiceForEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
 	var (
 		err    error
@@ -127,6 +100,57 @@ func getServiceForEndpoints(serviceStore kubeCache.Store, e *kubeAPI.Endpoints) 
 		return nil, fmt.Errorf("got a non service object in services store %v", obj)
 	}
 	return svc, nil
+}
+
+func getEndpointsForService(endpointsStore kubeCache.Store, s *kubeAPI.Service) (*kubeAPI.Endpoints, error) {
+	var (
+		err    error
+		key    string
+		obj    interface{}
+		exists bool
+		ok     bool
+		e      *kubeAPI.Endpoints
+	)
+	if key, err = kubeCache.MetaNamespaceKeyFunc(s); err != nil {
+		return nil, err
+	}
+	if obj, exists, err = endpointsStore.GetByKey(key); err != nil {
+		return nil, fmt.Errorf("Error getting endpoints object from endpoints store - %v", err)
+	}
+	if !exists {
+		log.WithFields(log.Fields{"name": s.Name, "namespace": s.Namespace}).Warn("Unable to find service for endpoint")
+		return nil, nil
+	}
+	if e, ok = obj.(*kubeAPI.Endpoints); !ok {
+		return nil, fmt.Errorf("got a non endpoints object in endpoints store %v", obj)
+	}
+	return e, nil
+}
+
+func buildServiceWatch(client *kubeClient.Client, watcher ServicesWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
+	return kubeFramework.NewInformer(
+		buildServiceLW(client),
+		&kubeAPI.Service{},
+		resyncPeriod,
+		kubeFramework.ResourceEventHandlerFuncs{
+			AddFunc:    watcher.AddService,
+			DeleteFunc: watcher.DeleteService,
+			UpdateFunc: watcher.UpdateService,
+		},
+	)
+}
+
+func buildEndpointsWatch(client *kubeClient.Client, watcher EndpointsWatcher, tagLabel string, resyncPeriod time.Duration) (kubeCache.Store, *kubeFramework.Controller) {
+	return kubeFramework.NewInformer(
+		buildEndpointsLW(client),
+		&kubeAPI.Endpoints{},
+		resyncPeriod,
+		kubeFramework.ResourceEventHandlerFuncs{
+			AddFunc:    watcher.AddEndpoints,
+			DeleteFunc: watcher.DeleteEndpoints,
+			UpdateFunc: watcher.UpdateEndpoints,
+		},
+	)
 }
 
 // Returns a kubeCache.ListWatch that gets all changes to services.

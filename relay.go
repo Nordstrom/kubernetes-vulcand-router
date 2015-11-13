@@ -152,40 +152,58 @@ func (rly *relay) testVulcandConnectivity() error {
 }
 
 func (rly *relay) AddService(obj interface{}) {
+	log.WithField("service", obj).Debug("Attempting to add service")
+
 	if s, ok := obj.(*kubeAPI.Service); ok {
-		var (
-			err      error
-			backend  *vulcand.Backend
-			frontend *vulcand.Frontend
-		)
 		serviceID := vulcandID(s)
 		if s.Spec.Type != kubeAPI.ServiceTypeClusterIP || kubeAPI.IsServiceIPSet(s) {
-			log.WithField("serviceID", serviceID).Debug("Not adding service")
+			log.WithField("serviceID", serviceID).Info("Not adding service")
 			return
 		}
-		log.WithField("serviceID", serviceID).Debug("Adding service")
-		if backend, err = newVulcandBackend(serviceID); err != nil {
-			log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not create vulcand backend")
-			return
-		}
-		if frontend, err = vulcandFrontendFromBackendAndService(*backend, s); err != nil {
-			log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not create vulcand frontend")
-			return
-		}
-		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
-			if err = rly.vulcandClient.UpsertBackend(*backend); err != nil {
-				return err
-			}
-			if err = rly.vulcandClient.UpsertFrontend(*frontend, 0); err != nil {
-				return err
-			}
-			return nil
-		})
+
+		rly.handleAddService(s)
 	}
 }
 
+func (rly *relay) handleAddService(s *kubeAPI.Service) {
+	rly.mlock.Lock()
+	defer rly.mlock.Unlock()
+
+	var (
+		err       error
+		backend   *vulcand.Backend
+		frontend  *vulcand.Frontend
+		endpoints *kubeAPI.Endpoints
+	)
+	serviceID := vulcandID(s)
+	log.WithField("serviceID", serviceID).Info("Adding service")
+	if backend, err = newVulcandBackend(serviceID); err != nil {
+		log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not create vulcand backend")
+		return
+	}
+	if frontend, err = vulcandFrontendFromBackendAndService(*backend, s); err != nil {
+		log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not create vulcand frontend")
+		return
+	}
+	if endpoints, err = rly.getEndpointsForService(s); err != nil || endpoints == nil {
+		log.WithFields(log.Fields{"serviceID": serviceID, "error": err}).Warn("Could not get endpoints for service")
+		return
+	}
+	updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
+		if err = rly.vulcandClient.UpsertBackend(*backend); err != nil {
+			return err
+		}
+		if err = rly.vulcandClient.UpsertFrontend(*frontend, 0); err != nil {
+			return err
+		}
+		return rly.syncServersForHeadlessService(endpoints, s)
+	})
+}
+
 func (rly *relay) DeleteService(obj interface{}) {
-	log.WithField("service", obj).Debug("Deleting service")
+	rly.mlock.Lock()
+	defer rly.mlock.Unlock()
+	log.WithField("service", obj).Debug("Attempting to delete service")
 
 	if s, ok := obj.(*kubeAPI.Service); ok {
 		remainingServersMap, err := rly.getServersForService(s)
@@ -217,11 +235,31 @@ func (rly *relay) DeleteService(obj interface{}) {
 }
 
 func (rly *relay) UpdateService(oldObj interface{}, newObj interface{}) {
+	log.WithFields(log.Fields{"old": oldObj, "new": newObj}).Debug("Attempting to update service")
+
 	rly.DeleteService(oldObj)
 	rly.AddService(newObj)
 }
 
+func (rly *relay) AddEndpoints(obj interface{}) {
+	log.WithField("endpoints", obj).Debug("Attempting to add endpoints")
+	rly.SyncEndpoints(obj)
+}
+
+func (rly *relay) DeleteEndpoints(obj interface{}) {
+	log.WithField("endpoints", obj).Debug("Attempting to remove endpoints")
+	rly.SyncEndpoints(obj)
+}
+
+func (rly *relay) UpdateEndpoints(oldObj interface{}, newObj interface{}) {
+	log.WithFields(log.Fields{"old": oldObj, "new": newObj}).Debug("Attempting to update endpoints")
+	rly.SyncEndpoints(newObj)
+}
+
 func (rly *relay) SyncEndpoints(obj interface{}) {
+	rly.mlock.Lock()
+	defer rly.mlock.Unlock()
+
 	if e, ok := obj.(*kubeAPI.Endpoints); ok {
 		svc, err := rly.getServiceForEndpoints(e)
 		if err != nil {
@@ -236,16 +274,9 @@ func (rly *relay) SyncEndpoints(obj interface{}) {
 			return
 		}
 		updateVulcandOrDie(rly.vulcandUpdateTimeout, func() error {
-			return rly.syncServersUsingEndpoints(e, svc)
+			return rly.syncServersForHeadlessService(e, svc)
 		})
 	}
-}
-
-func (rly *relay) syncServersUsingEndpoints(e *kubeAPI.Endpoints, svc *kubeAPI.Service) error {
-	rly.mlock.Lock()
-	defer rly.mlock.Unlock()
-
-	return rly.syncServersForHeadlessService(e, svc)
 }
 
 func (rly *relay) syncServersForHeadlessService(e *kubeAPI.Endpoints, svc *kubeAPI.Service) error {
@@ -263,7 +294,7 @@ func (rly *relay) syncServersForHeadlessService(e *kubeAPI.Endpoints, svc *kubeA
 				if endpointPort.Name == ServiceEndpointPortName {
 					addr := e.Subsets[idx].Addresses[subIdx].IP
 					s, err := newVulcandServer(addr, endpointPort.Port)
-					if err != nil {
+					if s == nil || err != nil {
 						log.WithFields(log.Fields{"address": addr, "port": endpointPort.Port, "error": err}).Warn("Unable to create vulcand server")
 						continue
 					}
@@ -284,12 +315,16 @@ func (rly *relay) syncServersForHeadlessService(e *kubeAPI.Endpoints, svc *kubeA
 	return nil
 }
 
+func (rly *relay) getEndpointsForService(s *kubeAPI.Service) (*kubeAPI.Endpoints, error) {
+	return getEndpointsForService(rly.endpointsStore, s)
+}
+
 func (rly *relay) getServiceForEndpoints(e *kubeAPI.Endpoints) (*kubeAPI.Service, error) {
 	return getServiceForEndpoints(rly.serviceStore, e)
 }
 
 func (rly *relay) getServersForService(s *kubeAPI.Service) (map[vulcand.ServerKey]vulcand.Server, error) {
-	return getServersForService(rly.vulcandClient, vulcandID(s))
+	return getServersForBackendKey(rly.vulcandClient, backendKeyFromService(s))
 }
 
 func (rly *relay) removeServersForService(svc *kubeAPI.Service, servers map[vulcand.ServerKey]vulcand.Server) error {
